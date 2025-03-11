@@ -1,5 +1,7 @@
 # This script analyses housing data for Luxembourg
 
+# Can work from git bash or terminal from RStudio
+
 library(dplyr)
 library(ggplot2)
 library(purrr)
