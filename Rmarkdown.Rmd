@@ -21,6 +21,7 @@ library(purrr)
 library(readxl)
 library(rvest)
 library(stringr)
+library(tidyr) # Treba za fill data
 
 
 
@@ -70,7 +71,7 @@ read_clean <- function(..., sheet){
 
 The same code but as function:
 
-```{r, eval=FALSE}
+```{r, eval=TRUE}
 
 get_raw_data <- function(url = "https://is.gd/1vvBAc"){
 
@@ -313,3 +314,146 @@ write.csv(country_level_data,
 Ok, and that’s it. You can take a look at the finalised file here1. You can now remove the save_data.R script, as you have successfully ported the code over to an RMarkdown file. If you have not done it yet, you can commit these changes and push.
 
 Let’s now do the same thing for the analysis script.
+
+# An Rmd for analysing data
+
+We will follow the same steps as before to convert the analysis script into an analysis RMarkdown file. Instead of showing the whole file here, I will show you two important points.
+
+The first point is removing redundancy. In the original script, we had the following lines:
+
+```{r}
+#Let’s compute the Laspeyeres index for each commune:
+
+commune_level_data <- commune_level_data %>%
+  group_by(locality) %>%
+  mutate(p0 = ifelse(year == "2010",
+                     average_price_nominal_euros,
+                     NA)) %>%
+  fill(p0, .direction = "down") %>%
+  mutate(p0_m2 = ifelse(year == "2010",
+                        average_price_m2_nominal_euros,
+                        NA)) %>%
+  fill(p0_m2, .direction = "down") %>%
+  ungroup() %>%
+  mutate(
+    pl = average_price_nominal_euros/p0*100,
+    pl_m2 = average_price_m2_nominal_euros/p0_m2 * 100)
+
+
+#Let’s also compute it for the whole country:
+
+country_level_data <- country_level_data %>%
+  mutate(p0 = ifelse(year == "2010",
+                     average_price_nominal_euros,
+                     NA)) %>%
+  fill(p0, .direction = "down") %>%
+  mutate(p0_m2 = ifelse(year == "2010",
+                        average_price_m2_nominal_euros,
+                        NA)) %>%
+  fill(p0_m2, .direction = "down") %>%
+  mutate(
+    pl = average_price_nominal_euros/p0*100,
+    pl_m2 = average_price_m2_nominal_euros/p0_m2 * 100)
+```
+
+As you can see, this is almost exactly the same code twice. The only difference between the two code snippets, is that we need to group by commune when computing the Laspeyeres index for the communes (remember, this index will make it easy to make comparisons). Instead of repeating 99% of the lines, we should create a function that will group the data if the data is the commune level data, and not group the data if it’s the national data. Here is this function:
+
+```{r}
+get_laspeyeres <- function(dataset, start_year = "2010"){
+
+  which_dataset <- deparse(substitute(dataset))
+
+  group_var <- if(grepl("commune", which_dataset)){
+                 quo(locality)
+               } else {
+                 NULL
+               }
+  dataset %>%
+    group_by(!!group_var) %>%
+    mutate(p0 = ifelse(year == start_year,
+                       average_price_nominal_euros,
+                       NA)) %>%
+    fill(p0, .direction = "down") %>%
+    mutate(p0_m2 = ifelse(year == start_year,
+                          average_price_m2_nominal_euros,
+                          NA)) %>%
+    fill(p0_m2, .direction = "down") %>%
+    ungroup() %>%
+    mutate(
+      pl = average_price_nominal_euros/p0*100,
+      pl_m2 = average_price_m2_nominal_euros/p0_m2*100)
+
+}
+```
+
+So, the first step is naming the function. We’ll call it get_laspeyeres(), and it’ll be a function of two arguments. The first is the data (commune or national level data) and the second is the starting date of the data. This second argument has a default value of “2010”. This is the year the data starts, and so this is the year the Laspeyeres index will have a value of 100.
+
+The following lines are probably the most complicated:
+
+```{r}
+which_dataset <- deparse(substitute(dataset))
+
+group_var <- if(grepl("commune", which_dataset)){
+               quo(locality)
+             } else {
+               NULL
+             }
+```
+
+1. substitute(dataset)
+
+    The substitute() function returns the unevaluated expression that was passed as an argument.
+    If dataset is a variable, substitute(dataset) returns the symbol dataset instead of its actual content.
+    
+2. deparse(substitute(dataset))
+
+    deparse() converts an R expression (like a symbol) into a character string.
+    deparse(substitute(dataset)) takes the unevaluated name of dataset and turns it into a character string.
+    The result is stored in which_dataset.
+
+But remember, we want to have an Rmd file that can be compiled into a document that can be read by humans. This means that to make the document clear, I suggest that we create one subsection by commune that we plot. Thankfully, we have learned all about child documents in the literate programming chapter, and this is what we will be using to avoid having to repeat ourselves. The first part is simply the function that we’ve already written:
+
+```{r}
+make_plot <- function(commune){
+
+  commune_data <- commune_level_data %>%
+    filter(locality == commune)
+
+  data_to_plot <- bind_rows(
+    country_level_data,
+    commune_data
+  )
+
+  ggplot(data_to_plot) +
+    geom_line(aes(y = pl_m2,
+                  x = year,
+                  group = locality,
+                  colour = locality))
+}
+
+```
+
+**Now comes the interesting part:**
+
+results = "asis" - chunk will be interpreted as raw markdown.
+```{r, results = "asis"}
+res <- lapply(communes, function(x){
+
+  knitr::knit_child(text = c(
+
+    '\n',
+    '## Plot for commune: `r x`',
+    '\n',
+    '```{r, echo = FALSE}',
+    'print(make_plot(x))',
+    '```'
+
+     ),
+     envir = environment(),
+     quiet = TRUE)
+
+})
+
+cat(unlist(res), sep = "\n")
+
+```
